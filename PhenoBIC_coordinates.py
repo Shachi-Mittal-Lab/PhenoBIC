@@ -338,7 +338,7 @@ def compute_normalization_from_bounds(
         raise FileNotFoundError(f"Image file not found: {image_path!r}")
 
     # Read the measurements TSV file
-    df = pd.read_csv(measurements_csv_path, sep="\t")
+    df = pd.read_csv(measurements_csv_path)
     df.columns = [str(c).strip().replace("\ufeff", "") for c in df.columns]
     # Rename columns to standardize QuPath export names
     _COLUMN_ALIASES = {
@@ -355,7 +355,7 @@ def compute_normalization_from_bounds(
     required_cols = ["Object ID", "Bounds_x", "Bounds_y", "Bounds_width", "Bounds_height"]
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
-        raise ValueError(f"Measurements TSV missing column(s): {missing}. Actual: {list(df.columns)}")
+        raise ValueError(f"Measurements CSV missing column(s): {missing}. Actual: {list(df.columns)}")
 
     # Number of cells
     n_cells = len(df)
@@ -471,9 +471,9 @@ def compute_normalization_from_bounds(
 def run_PhenoBIC(
     image_path,
     measurements_csv_path,
-    channel_index,
-    channel_name,
-    output_dir_path,
+    channel_indices,
+    channel_names,
+    out_dir_path,
     model_path,
     num_cells_batch=4000,
     tile_size=10000,
@@ -485,181 +485,200 @@ def run_PhenoBIC(
     Run PhenoBIC phenotype inference for one image using tile-based reads.
     Splits the image into overlapping tiles, assigns each cell to a tile, and processes tile by tile.
     """
-    # Ensure image file path exists and is valid
-    image_path = os.path.abspath(os.path.normpath(image_path.strip()))
-    if not os.path.isfile(image_path):
-        raise FileNotFoundError(f"Image file not found: {image_path!r}")
-    # Get the image file name
-    image_name = os.path.splitext(os.path.basename(image_path))[0]
 
-    # Compute normalization min/max from image and bounds
-    print(f"[PhenoBIC] Computing normalization percentiles from bounds (channel {channel_index})...")
-    min_int, max_int = compute_normalization_from_bounds(
-        image_path, measurements_csv_path, channel_index,
-        lower_percentile=lower_percentile, upper_percentile=upper_percentile, tile_size=min(5000, tile_size),
-    )
+    # Check that channel_names is a list of strings
+    if not isinstance(channel_names, list) or not all(isinstance(x, str) for x in channel_names):
+        raise TypeError("channel_names must be a list of strings")
 
-    # Ensure the output directory path exists and is valid
-    out_dir_path = os.path.abspath(os.path.normpath(out_dir_path.strip()))
-    if not os.path.isdir(out_dir_path):
-        raise FileNotFoundError(f"Output directory not found: {out_dir_path!r}")
+    # Check that channel_indices is a list of integers
+    if not isinstance(channel_indices, list) or not all(isinstance(x, int) for x in channel_indices):
+        raise TypeError("channel_indices must be a list of integers")
 
-    # Output file paths
-    output_min_json = os.path.join(out_dir_path, "min_normalization", f"{image_name}.json")
-    output_max_json = os.path.join(out_dir_path, "max_normalization", f"{image_name}.json")
-    os.makedirs(os.path.join(out_dir_path, "results"), exist_ok=True)
-    output_csv_path = os.path.join(out_dir_path, "results", f"{image_name}.csv")
-
-    # Save min/max to JSON files (merge with existing so multi-channel runs accumulate)
-    if channel_name and output_min_json:
-        _write_normalization_json(output_min_json, channel_name, min_int)
-        print(f"[PhenoBIC] Wrote min normalization: {output_min_json}")
-    if channel_name and output_max_json:
-        _write_normalization_json(output_max_json, channel_name, max_int)
-        print(f"[PhenoBIC] Wrote max normalization: {output_max_json}")
-
-    # Load the PhenoBIC model
-    print(f"[PhenoBIC] Loading model: {os.path.basename(model_path)}")
-    model = tf.keras.models.load_model(os.path.abspath(model_path.strip()), compile=False)
-
-    # Load and normalize measurements CSV
-    df = pd.read_csv(measurements_csv_path, sep="\t")
-    df.columns = [str(c).strip().replace("\ufeff", "") for c in df.columns]
-    # Rename columns to standardize QuPath export names
-    _COLUMN_ALIASES = {
-        "Bounds x": "Bounds_x",
-        "Bounds y": "Bounds_y",
-        "Bounds width": "Bounds_width",
-        "Bounds height": "Bounds_height",
-        "Object  ID": "Object ID",
-    }
-    rename = {k: v for k, v in _COLUMN_ALIASES.items() if k in df.columns and v not in df.columns}
-    if rename:
-        df = df.rename(columns=rename)
-    # Ensure the required columns are present
-    required_cols = ["Object ID", "Bounds_x", "Bounds_y", "Bounds_width", "Bounds_height"]
-    missing = [c for c in required_cols if c not in df.columns]
-    if missing:
-        raise ValueError(f"Measurements TSV missing column(s): {missing}. Actual: {list(df.columns)}")
+    for c_i, channel_index in enumerate(channel_indices):
+        channel_name = channel_names[c_i]
     
-    # Number of cells to process
-    num_cells = len(df)
-    # Get the image name
-    image_name = os.path.basename(image_path)
-    # Get the x, y, width, height, and buffer of the cell bounding boxes
-    x_col = np.floor(df["Bounds_x"].astype(float)).astype(int)
-    y_col = np.floor(df["Bounds_y"].astype(float)).astype(int)
-    w_col = np.ceil(df["Bounds_width"].astype(float)).astype(int)
-    h_col = np.ceil(df["Bounds_height"].astype(float)).astype(int)
-    x_buf_col = np.ceil(w_col * buffer_ratio).astype(int)
-    y_buf_col = np.ceil(h_col * buffer_ratio).astype(int)
-    object_ids = df["Object ID"].values
+        # Ensure image file path exists and is valid
+        image_path = os.path.abspath(os.path.normpath(image_path.strip()))
+        if not os.path.isfile(image_path):
+            raise FileNotFoundError(f"Image file not found: {image_path!r}")
+        # Get the image file name
+        image_name = os.path.splitext(os.path.basename(image_path))[0]
 
-    # Get the image dimensions and axes (no pixel load).
-    shape, y_axis, x_axis, c_axis = _ometiff_shape_and_axes(image_path)
-    height = int(shape[y_axis])
-    width = int(shape[x_axis])
+        # Compute normalization min/max from image and bounds
+        print(f"[PhenoBIC] Computing normalization percentiles from bounds (channel {channel_index})...")
+        min_int, max_int = compute_normalization_from_bounds(
+            image_path, measurements_csv_path, channel_index,
+            lower_percentile=lower_percentile, upper_percentile=upper_percentile, tile_size=min(5000, tile_size),
+        )
 
-    # Tile grid: overlap so each cell's buffered box fits in at least one tile.
-    # Create an ImageDataGenerator for preprocessing the images
-    gen = tf.keras.preprocessing.image.ImageDataGenerator(rescale=1.0 / 255)
-    # Calculate the buffered width and height of the cells
-    buffered_w = w_col + 2 * x_buf_col
-    buffered_h = h_col + 2 * y_buf_col
-    # Calculate the overlap between tiles (max of buffered width and height of cells)
-    overlap = int(min(tile_size - 1, max(np.max(buffered_w), np.max(buffered_h)))) if num_cells else 0
-    # Calculate the step size for the x and y dimensions
-    step_x = max(1, tile_size - overlap)
-    step_y = max(1, tile_size - overlap)
-    # Calculate the number of tiles in the x and y dimensions
-    n_tx = max(1, int(np.ceil(width / step_x)))
-    n_ty = max(1, int(np.ceil(height / step_y)))
-    print(f"[PhenoBIC] Image: {image_name} — {num_cells} cells, tile {tile_size} px, overlap {overlap} px, {n_ty}x{n_tx} tiles")
+        # Ensure the output directory path exists and is valid
+        out_dir_path = os.path.abspath(os.path.normpath(out_dir_path.strip()))
+        if not os.path.isdir(out_dir_path):
+            raise FileNotFoundError(f"Output directory not found: {out_dir_path!r}")
 
-    # Assign each cell to a tile (key = (ty, tx)); value = list of (object_id, x, y, w, h, x_buf, y_buf).
-    tile_cells = {}
-    # iterate over all the cells
-    for i in range(num_cells):
+        # Output file paths
+        output_min_json = os.path.join(out_dir_path, "min_normalization", f"{image_name}.json")
+        output_max_json = os.path.join(out_dir_path, "max_normalization", f"{image_name}.json")
+        os.makedirs(os.path.join(out_dir_path, "results"), exist_ok=True)
+        output_csv_path = os.path.join(out_dir_path, "results", f"{image_name}.csv")
+
+        # Save min/max to JSON files (merge with existing so multi-channel runs accumulate)
+        if channel_name and output_min_json:
+            _write_normalization_json(output_min_json, channel_name, min_int)
+            print(f"[PhenoBIC] Wrote min normalization: {output_min_json}")
+        if channel_name and output_max_json:
+            _write_normalization_json(output_max_json, channel_name, max_int)
+            print(f"[PhenoBIC] Wrote max normalization: {output_max_json}")
+
+        # Load the PhenoBIC model
+        print(f"[PhenoBIC] Loading model: {os.path.basename(model_path)}")
+        model = tf.keras.models.load_model(os.path.abspath(model_path.strip()), compile=False)
+
+        # Load and normalize measurements CSV
+        df = pd.read_csv(measurements_csv_path)
+        df.columns = [str(c).strip().replace("\ufeff", "") for c in df.columns]
+        # Rename columns to standardize QuPath export names
+        _COLUMN_ALIASES = {
+            "Bounds x": "Bounds_x",
+            "Bounds y": "Bounds_y",
+            "Bounds width": "Bounds_width",
+            "Bounds height": "Bounds_height",
+            "Object  ID": "Object ID",
+        }
+        rename = {k: v for k, v in _COLUMN_ALIASES.items() if k in df.columns and v not in df.columns}
+        if rename:
+            df = df.rename(columns=rename)
+        # Ensure the required columns are present
+        required_cols = ["Object ID", "Bounds_x", "Bounds_y", "Bounds_width", "Bounds_height"]
+        missing = [c for c in required_cols if c not in df.columns]
+        if missing:
+            raise ValueError(f"Measurements TSV missing column(s): {missing}. Actual: {list(df.columns)}")
+        
+        # Number of cells to process
+        num_cells = len(df)
+        # Get the image name
+        image_name = os.path.basename(image_path)
         # Get the x, y, width, height, and buffer of the cell bounding boxes
-        x, y = int(x_col.iloc[i]), int(y_col.iloc[i])
-        w, h = int(w_col.iloc[i]), int(h_col.iloc[i])
-        x_buf, y_buf = int(x_buf_col.iloc[i]), int(y_buf_col.iloc[i])
-        bx_lo, by_lo = x - x_buf, y - y_buf
-        bx_hi, by_hi = x + w + x_buf, y + h + y_buf
-        # Calculate the centroid of the cell
-        cx, cy = x + w // 2, y + h // 2
-        # Assign the cell to a tile
-        ty, tx = _assign_cell_to_tile(cx, cy, bx_lo, by_lo, bx_hi, by_hi, n_ty, n_tx, step_y, step_x, tile_size, height, width)
-        # Create a dictionary of tiles and the cells in them
-        key = (ty, tx)
-        # If the tile is not in the dictionary, create a entry for it
-        if key not in tile_cells:
-            tile_cells[key] = []
-        # Add the cell to the dictionary
-        tile_cells[key].append((object_ids[i], x, y, w, h, x_buf, y_buf))
+        x_col = np.floor(df["Bounds_x"].astype(float)).astype(int)
+        y_col = np.floor(df["Bounds_y"].astype(float)).astype(int)
+        w_col = np.ceil(df["Bounds_width"].astype(float)).astype(int)
+        h_col = np.ceil(df["Bounds_height"].astype(float)).astype(int)
+        x_buf_col = np.ceil(w_col * buffer_ratio).astype(int)
+        y_buf_col = np.ceil(h_col * buffer_ratio).astype(int)
+        object_ids = df["Object ID"].values
 
-    # Process each tile: load tile, extract ROIs, preprocess, predict, store by object ID.
-    # Dictionary to store Cell object IDs and the prediction for each cell
-    predictions_dict = {}
-    # Iterate over all the tiles
-    for ty in range(n_ty):
-        for tx in range(n_tx):
+        # Get the image dimensions and axes (no pixel load).
+        shape, y_axis, x_axis, c_axis = _ometiff_shape_and_axes(image_path)
+        height = int(shape[y_axis])
+        width = int(shape[x_axis])
+
+        # Tile grid: overlap so each cell's buffered box fits in at least one tile.
+        # Create an ImageDataGenerator for preprocessing the images
+        gen = tf.keras.preprocessing.image.ImageDataGenerator(rescale=1.0 / 255)
+        # Calculate the buffered width and height of the cells
+        buffered_w = w_col + 2 * x_buf_col
+        buffered_h = h_col + 2 * y_buf_col
+        # Calculate the overlap between tiles (max of buffered width and height of cells)
+        overlap = int(min(tile_size - 1, max(np.max(buffered_w), np.max(buffered_h)))) if num_cells else 0
+        # Calculate the step size for the x and y dimensions
+        step_x = max(1, tile_size - overlap)
+        step_y = max(1, tile_size - overlap)
+        # Calculate the number of tiles in the x and y dimensions
+        n_tx = max(1, int(np.ceil(width / step_x)))
+        n_ty = max(1, int(np.ceil(height / step_y)))
+        print(f"[PhenoBIC] Image: {image_name} — {num_cells} cells, tile {tile_size} px, overlap {overlap} px, {n_ty}x{n_tx} tiles")
+
+        # Assign each cell to a tile (key = (ty, tx)); value = list of (object_id, x, y, w, h, x_buf, y_buf).
+        tile_cells = {}
+        # iterate over all the cells
+        for i in range(num_cells):
+            # Get the x, y, width, height, and buffer of the cell bounding boxes
+            x, y = int(x_col.iloc[i]), int(y_col.iloc[i])
+            w, h = int(w_col.iloc[i]), int(h_col.iloc[i])
+            x_buf, y_buf = int(x_buf_col.iloc[i]), int(y_buf_col.iloc[i])
+            bx_lo, by_lo = x - x_buf, y - y_buf
+            bx_hi, by_hi = x + w + x_buf, y + h + y_buf
+            # Calculate the centroid of the cell
+            cx, cy = x + w // 2, y + h // 2
+            # Assign the cell to a tile
+            ty, tx = _assign_cell_to_tile(cx, cy, bx_lo, by_lo, bx_hi, by_hi, n_ty, n_tx, step_y, step_x, tile_size, height, width)
+            # Create a dictionary of tiles and the cells in them
             key = (ty, tx)
-            # If the tile is not in the dictionary or is empty, skip it because it doesn't contain any cells
-            if key not in tile_cells or not tile_cells[key]:
-                continue
-            cell_list = tile_cells[key]
-            # Calculate the lower and upper bounds of the tile
-            y_lo = ty * step_y
-            y_hi = min(ty * step_y + tile_size, height)
-            x_lo = tx * step_x
-            x_hi = min(tx * step_x + tile_size, width)
-            # Calculate the bounds of the cells in the tile relative to the tile
-            bounds_tile_rel = [(x - x_lo, y - y_lo, w, h, x_buf, y_buf) for (_, x, y, w, h, x_buf, y_buf) in cell_list]
-            # Get the object IDs of the cells in the tile
-            oids = [oid for (oid, *_) in cell_list]
+            # If the tile is not in the dictionary, create a entry for it
+            if key not in tile_cells:
+                tile_cells[key] = []
+            # Add the cell to the dictionary
+            tile_cells[key].append((object_ids[i], x, y, w, h, x_buf, y_buf))
 
-            # Create a pool of workers to extract the ROIs from the cells (multiprocessing)
-            with mp.Pool(
-                # Initialize the worker with the image path, channel index, and the bounds of the tile
-                initializer=_init_worker_tile,
-                initargs=(image_path, channel_index, y_lo, y_hi, x_lo, x_hi, y_axis, x_axis, c_axis),
-            ) as pool:
-                # Iterate over the cells in the tile in batches
-                for start in range(0, len(bounds_tile_rel), num_cells_batch):
-                    # Calculate the end index of the batch
-                    end = min(start + num_cells_batch, len(bounds_tile_rel))
-                    # Get the bounds of the cells in the batch
-                    batch_bounds = bounds_tile_rel[start:end]
-                    # Get the object IDs of the cells in the batch
-                    batch_oids = oids[start:end]
-                    # Extract the ROIs from the cells
-                    rois = pool.map(_extract_roi, batch_bounds)
-                    # Preprocess the ROIs
-                    rois = [preprocess_roi(r, min_int, max_int) for r in rois]
-                    # Resize the ROIs to 48x48 pixels
-                    rois = np.array([
-                        np.asarray(Image.fromarray(np.asarray(im, dtype=np.uint8)).resize((48, 48), Image.NEAREST))
-                        for im in rois
-                    ])
-                    # PhenoBIC prediction for each cell in the batch
-                    flow = gen.flow(x=rois, batch_size=32, shuffle=False)
-                    pred = model.predict(flow)
-                    pred = pred.reshape(-1)
-                    # Convert the predictions to binary cell expressionlabels
-                    labels = np.where(pred <= 0.5, "neg", "pos")
-                    # Store the predictions for each cell
-                    for j, oid in enumerate(batch_oids):
-                        predictions_dict[oid] = labels[j]
-            print(f"[PhenoBIC] Tile ({ty + 1},{tx + 1})/{n_ty}x{n_tx} — {len(cell_list)} cells done ({len(predictions_dict)}/{num_cells})")
+        # Process each tile: load tile, extract ROIs, preprocess, predict, store by object ID.
+        # Dictionary to store Cell object IDs and the prediction for each cell
+        predictions_dict = {}
+        # Iterate over all the tiles
+        for ty in range(n_ty):
+            for tx in range(n_tx):
+                key = (ty, tx)
+                # If the tile is not in the dictionary or is empty, skip it because it doesn't contain any cells
+                if key not in tile_cells or not tile_cells[key]:
+                    continue
+                cell_list = tile_cells[key]
+                # Calculate the lower and upper bounds of the tile
+                y_lo = ty * step_y
+                y_hi = min(ty * step_y + tile_size, height)
+                x_lo = tx * step_x
+                x_hi = min(tx * step_x + tile_size, width)
+                # Calculate the bounds of the cells in the tile relative to the tile
+                bounds_tile_rel = [(x - x_lo, y - y_lo, w, h, x_buf, y_buf) for (_, x, y, w, h, x_buf, y_buf) in cell_list]
+                # Get the object IDs of the cells in the tile
+                oids = [oid for (oid, *_) in cell_list]
 
-    # Convert predictions dictionary to a list of predictions
-    predictions_list = [predictions_dict[oid] for oid in object_ids]
-    print(f"[PhenoBIC] Writing results: {os.path.basename(output_csv_path)}")
-    # Create a DataFrame with the object IDs and the predictions
-    out = pd.DataFrame({"Object ID": df["Object ID"], "Class": predictions_list})
-    # Write the DataFrame to a CSV file
-    out.to_csv(output_csv_path, index=False)
-    print(f"[PhenoBIC] Done. {num_cells} cells classified.")
-    # Return the path to the output CSV file
+                # Create a pool of workers to extract the ROIs from the cells (multiprocessing)
+                with mp.Pool(
+                    # Initialize the worker with the image path, channel index, and the bounds of the tile
+                    initializer=_init_worker_tile,
+                    initargs=(image_path, channel_index, y_lo, y_hi, x_lo, x_hi, y_axis, x_axis, c_axis),
+                ) as pool:
+                    # Iterate over the cells in the tile in batches
+                    for start in range(0, len(bounds_tile_rel), num_cells_batch):
+                        # Calculate the end index of the batch
+                        end = min(start + num_cells_batch, len(bounds_tile_rel))
+                        # Get the bounds of the cells in the batch
+                        batch_bounds = bounds_tile_rel[start:end]
+                        # Get the object IDs of the cells in the batch
+                        batch_oids = oids[start:end]
+                        # Extract the ROIs from the cells
+                        rois = pool.map(_extract_roi, batch_bounds)
+                        # Preprocess the ROIs
+                        rois = [preprocess_roi(r, min_int, max_int) for r in rois]
+                        # Resize the ROIs to 48x48 pixels
+                        rois = np.array([
+                            np.asarray(Image.fromarray(np.asarray(im, dtype=np.uint8)).resize((48, 48), Image.NEAREST))
+                            for im in rois
+                        ])
+                        # PhenoBIC prediction for each cell in the batch
+                        flow = gen.flow(x=rois, batch_size=32, shuffle=False)
+                        pred = model.predict(flow)
+                        pred = pred.reshape(-1)
+                        # Convert the predictions to binary cell expressionlabels
+                        labels = np.where(pred <= 0.5, "neg", "pos")
+                        # Store the predictions for each cell
+                        for j, oid in enumerate(batch_oids):
+                            predictions_dict[oid] = labels[j]
+                print(f"[PhenoBIC] Tile ({ty + 1},{tx + 1})/{n_ty}x{n_tx} — {len(cell_list)} cells done ({len(predictions_dict)}/{num_cells})")
+
+        # Convert predictions dictionary to a list of predictions
+        predictions_list = [predictions_dict[oid] for oid in object_ids]
+        print(f"[PhenoBIC] Writing results: {os.path.basename(output_csv_path)}")
+        # Create a DataFrame with the object IDs and the predictions
+        out = pd.DataFrame({"Object ID": df["Object ID"], channel_name: predictions_list})
+        output_csv_path = os.path.abspath(os.path.normpath(output_csv_path.strip()))
+        # Write the DataFrame to a CSV file
+        if not os.path.isfile(output_csv_path):
+            out.to_csv(output_csv_path, index=False)
+        else:
+            written_df = pd.read_csv(output_csv_path)
+            out = out.merge(written_df, how='left', on='Object ID')
+            out.to_csv(output_csv_path, index=False)
+        print(f"[PhenoBIC] Done. {num_cells} cells classified.")
+        # Return the path to the output CSV file
+
     return output_csv_path
