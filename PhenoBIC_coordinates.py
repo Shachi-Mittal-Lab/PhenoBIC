@@ -475,8 +475,8 @@ def run_PhenoBIC(
     channel_names,
     out_dir_path,
     model_path,
-    num_cells_batch=4000,
     tile_size=10000,
+    num_cells_batch=4000,
     buffer_ratio=0.1,
     lower_percentile=10.0,
     upper_percentile=90.0,
@@ -484,6 +484,40 @@ def run_PhenoBIC(
     """
     Run PhenoBIC phenotype inference for one image using tile-based reads.
     Splits the image into overlapping tiles, assigns each cell to a tile, and processes tile by tile.
+    Iterates over all the channels and computes the normalization percentiles for each channel.
+
+    Parameters
+    ----------
+    image_path : str
+        Path to the multiplex image (TIFF or TIFF-derived format).
+    measurements_csv_path : str
+        Path to CSV file with Object ID and bounding box columns.
+    channel_indices : list of int
+        Channel indices of the multiplex image to run inference on (0-based).
+    channel_names : list of str
+        Names for each channel.
+    out_dir_path : str
+        Path to directory for writing normalization JSONs and CSV output.
+    model_path : str
+        Path to load the PhenoBIC Keras model.
+    tile_size : int, optional
+        Square tile size in pixels (default 10000). Increase for faster processing at the expense of memory. Reduce if running out of memory.
+    num_cells_batch : int, optional
+        Cells per batch within a tile (default 4000). Increase for faster processing at the expense of memory. Reduce if running out of memory.
+        Optimize tile_size first and then num_cells_batch only if required.
+    buffer_ratio : float, optional
+        Buffer around cell boundingbox as fraction of box size (default 0.1, i.e. 10% of the box size).
+    lower_percentile : float, optional
+        Lower percentile clip for normalization (default 10.0, i.e. minimum of the 10th percentile within-cell channel intensity of all cells).
+    upper_percentile : float, optional
+        Upper percentile clip for normalization (default 90.0, i.e. maximum of the 90th percentile within-cell channel intensity of all cells).
+
+    Outputs
+    -------
+    Writes the following files to the output directory:
+    - min_normalization/{image_name}.json: JSON file containing the lower normalization clip values for each channel.
+    - max_normalization/{image_name}.json: JSON file containing the upper normalization clip values for each channel.
+    - results/{image_name}.csv: CSV file containing the Object ID and per-channel cell expression class predictions by PhenoBIC.
     """
 
     # Check that channel_names is a list of strings
@@ -681,4 +715,4 @@ def run_PhenoBIC(
         print(f"[PhenoBIC] Done. {num_cells} cells classified.")
         # Return the path to the output CSV file
 
-    return output_csv_path
+    return None
