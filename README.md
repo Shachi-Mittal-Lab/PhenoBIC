@@ -51,6 +51,10 @@ conda install -c conda-forge cudatoolkit=11.2 cudnn=8.1.0
 ```
 Please refer to [tensorflow documentation](https://www.tensorflow.org/install/pip#windows-native_1) for additional instructions.
 
+### Step 2: Download the PhenoBIC model
+
+Install the PhenoBIC `.keras` model from [here](https://github.com/your-org/qupath-extension-phenobic/releases)
+
 ---
 
 ## Running PhenoBIC
