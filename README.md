@@ -122,6 +122,6 @@ Replace {Sample base}, {Patch_#}, and {Channel_#} to match your naming conventio
 Sample data are shown in [XXXX](google.com)
 
 #### Implementation
-Example notebook shown in `run_PhenoBIC_masks.ipynb`.
+Example notebook shown in `run_PhenoBIC_masks.ipynb`. Results are stored in `{Sample base}/PhenoBIC_output`
 
 We find that this approach can be slower than the tabular approach that directly reads from a large image, especially for small patch sizes.
