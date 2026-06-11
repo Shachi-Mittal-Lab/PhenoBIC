@@ -14,7 +14,6 @@ If you use PhenoBIC, please consider giving this repository a star ⭐️ and al
 
 ## System Requirements
 
-- Windows Operating System
 - Supports TIFF and TIFF-derived multiplex image formats (e.g. OME-TIFF)
 
 ---
