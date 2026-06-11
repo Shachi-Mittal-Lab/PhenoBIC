@@ -52,7 +52,7 @@ Please refer to [tensorflow documentation](https://www.tensorflow.org/install/pi
 
 ### Step 2: Download the PhenoBIC model
 
-Install the PhenoBIC `.keras` model from [here](https://github.com/your-org/qupath-extension-phenobic/releases)
+Install the `PhenoBIC_model1.keras` model from [here](https://huggingface.co/mittal-research-lab/PhenoBIC/tree/main)
 
 ---
 
