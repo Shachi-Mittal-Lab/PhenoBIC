@@ -120,7 +120,7 @@ Required file directory structure of multiplex channels and cell segmentation ma
 
 Replace {Sample base}, {Patch_#}, and {Channel_#} to match your naming convention for samples, patches/tiles, and marker channels.
 
-Sample data are shown in [XXXX](google.com)
+Sample data are shown in [this HuggingFace repo](https://huggingface.co/datasets/mittal-research-lab/PhenoBIC-Data).
 
 #### Implementation
 Example notebook shown in `run_PhenoBIC_masks.ipynb`. Results are stored in `{Sample base}/PhenoBIC_output`
