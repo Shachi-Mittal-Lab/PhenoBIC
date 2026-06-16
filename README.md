@@ -1,4 +1,4 @@
-# About
+<img width="1182" height="667" alt="image" src="https://github.com/user-attachments/assets/407ad360-4eb8-4d45-b3fb-0c737cb292f0" /># About
 
 PhenoBIC allows for automated and operator-independent cell biomarker expression classification with spatial multiplex imaging data. PhenoBIC is a deep learning model that predicts marker co-expression phenotype of cells by performing image classification of the biomarker "imprint" (staining pattern) of the cell.
 
@@ -10,7 +10,7 @@ PhenoBIC allows for automated and operator-independent cell biomarker expression
 
 If you use PhenoBIC, please consider giving this repository a star ⭐️ and also cite the following:
 
-- **PhenoBIC paper**: Sankaranarayanan, A. et al.
+- **PhenoBIC paper**: Sankaranarayanan, A. et al. PhenoBIC: operator-free single-cell spatial phenotyping in multiplex imaging data using deep learning of cell staining patterns. <i>bioRxiv</i> <b>2026</b>. https://www.biorxiv.org/content/10.64898/2026.06.11.731702v1
 
 ---
 
